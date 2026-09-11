@@ -1,0 +1,135 @@
+# ============================================================
+# Adaptive Variable-Resolution 2.5D LiDAR Mapping
+# Default configuration — all tunable parameters live here.
+# Units: distances in metres, angles in radians, size in bytes.
+# ============================================================
+
+# --- Sensor / preprocessing ---
+preprocess:
+  min_range: 1.0            # drop points closer than this (metres)
+  max_range: 100.0          # drop points farther than this (metres)
+  height_min: -5.0          # clip height (metres)
+  height_max: 5.0           # clip height (metres)
+  decimation:
+    enabled: true
+    beyond: 60.0            # beyond this radius keep only every N-th point
+    keep_every: 1           # 1 == keep every point (no decimation)
+
+# --- Ground segmentation (RANSAC plane bootstrap) ---
+ground:
+  ransac: true
+  max_iterations: 100
+  distance_threshold: 0.18   # metres, inliers within this distance of plane
+  candidate_ratio: 0.05      # use lowest 5% points as plane candidates
+  min_inliers: 500           # fallback if fewer inliers -> horizontal plane z=0
+
+# --- Heuristic pseudo-label bootstrap (height + slope + intensity) ---
+labels:
+  ground_tolerance: 0.30     # metres above ground plane still counted as terrain
+  object_min_height: 0.30    # metres above ground -> static obstacle
+  high_object_min_height: 1.0  # tall structures (walls/poles/buildings)
+  use_intensity: true
+  intensity_floor: 0.02      # very dark returns treated as noise -> unknown
+
+# --- Variable-resolution polar bands (rmin/rmax half-open) ---
+# cell size increases with range (foveation). cell is metres.
+bands:
+  - {rmin: 0.0,  rmax: 10.0, cell: 0.05}    # 5 cm inner
+  - {rmin: 10.0, rmax: 30.0, cell: 0.125}   # 12.5 cm
+  - {rmin: 30.0, rmax: 60.0, cell: 0.25}    # 25 cm
+  - {rmin: 60.0, rmax: 100.0, cell: 0.50}   # 50 cm outer
+
+# --- Semantic classes ---
+classes:
+  names: ["drivable", "static_obstacle", "dynamic_object"]
+  colors:                     # RGB 0-255
+    drivable: [0, 200, 0]
+    static_obstacle: [100, 100, 100]
+    dynamic_object: [255, 140, 0]
+    unknown: [50, 50, 50]
+
+# --- Drivability layer ---
+# A drivable cell is split into one of three walkability tiers by counting how
+# many of the two criteria below it violates:
+#   tier 0 = meets both      (firm / smooth ground)
+#   tier 1 = violates one    (moderate ground)
+#   tier 2 = violates both   (rough / steep ground)
+drivability:
+  slope_threshold: 0.35        # max slope (rise/run) for drivable
+  roughness_threshold: 0.08    # max sqrt(height_variance) metres
+  tier_names: ["firm", "moderate", "rough"]
+
+# --- Temporal integration ---
+temporal:
+  enabled: true
+  log_odds_hit: 0.85           # alpha (added to log-odds on hit)
+  log_odds_miss: 0.40          # beta (subtracted on miss)
+  log_odds_min: -4.0
+  log_odds_max: 4.0
+  ema_gamma: 0.7               # height/intensity EMA blend factor
+  dynamic_height_delta: 0.5    # metres height jump => dynamic cell
+  occupancy_threshold: 0.5     # cell considered occupied above this probability
+  dbscan:
+    enabled: true
+    eps: 1.0                   # metres
+    min_samples: 3
+
+# --- Object extraction (dashboard "objects" table) ---
+# Non-ground occupied cells are pooled onto a coarse Cartesian lattice and
+# merged with 8-connectivity, so a wall, a pole or a parked car becomes a
+# single row in the dashboard table.
+objects:
+  enabled: true
+  cell_size: 0.5               # metres, coarse lattice used to merge neighbours
+  min_cells: 5                 # discard blobs smaller than this many grid cells
+  min_height: 0.30             # metres, cell top must rise this far to count
+  max_range: 100.0             # metres, ignore blobs beyond this radius
+  max_objects: 200             # cap on the rows shown (nearest kept first)
+
+# --- Segmentation model (optional DL head; heuristic is default) ---
+model:
+  backend: "heuristic"         # "heuristic" | "rangenet" (requires torch)
+  num_classes: 3
+
+# --- Visualization ---
+viz:
+  backend: "pyqtgraph"        # "matplotlib" (headless-safe) | "pyqtgraph"
+  width: 900
+  dpi: 120
+  show_band_boundaries: true
+  show_drivability: true
+  out_dir: "reports"
+
+# --- Metrics ---
+metrics:
+  uniform_cell_size: 0.05      # metres, for memory comparison baselines
+  uniform_height_span: 25.0    # metres, for 3D voxel baseline
+  bytes_per_variable_cell: 32
+  bytes_per_uniform25d_cell: 8
+  bytes_per_uniform3d_voxel: 2
+
+# --- 3D rendering (Open3D offscreen renderer) ---
+# Colour scheme:
+#   * walkable ground  -> 3 colours, one per drivability tier (see `drivability`)
+#   * static obstacles -> height-ramped colour so structure reads in 3D
+#   * dynamic objects  -> single high-contrast colour (temporal stage)
+#   * "density" mode   -> gradient of grid samples per m^2 (the foveation itself)
+render3d:
+  enabled: true
+  width: 1280
+  height: 720
+  point_size: 2.5
+  max_range: 60.0              # metres, cells beyond this are left out of the 3D view
+  view_crop_quantile: 0.5      # percent trimmed from each side so the view is centred
+  zoom: 0.42                   # >=0.2 fits the cropped map; smaller = closer
+  elev_deg: 30.0               # camera elevation above the ground plane
+  azim_deg: -110.0             # camera azimuth around the sensor
+  background: [0.043, 0.051, 0.063]
+  extrude_obstacles: true      # raise obstacle / dynamic cells into 3D prisms
+  min_extrude: 0.30            # metres, min prism height above the cell mean
+  obstacle_max_height: 3.0     # metres at which the obstacle colour ramp saturates
+  ground_tier_colors: ["#00e676", "#d4e157", "#2e7d32"]
+  obstacle_ramp: ["#1f6feb", "#8957e5", "#db61a2"]
+  dynamic_color: "#ff8c00"
+  unknown_color: "#484f58"
+  density_ramp: ["#0d0887", "#7e03a8", "#cc4778", "#f89540", "#f0f921"]
